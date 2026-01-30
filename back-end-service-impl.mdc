@@ -1,0 +1,562 @@
+---
+name: service-impl
+description: ServiceImpl服务实现类开发规范
+---
+
+# ServiceImpl服务实现类开发规范
+
+## 概述
+
+ServiceImpl是业务逻辑层的实现类，负责处理具体的业务逻辑，调用Dao层进行数据操作，或调用Dubbo服务进行分布式事务处理。
+
+## 类级别规范
+
+### 注解使用
+
+1. **@Service**
+   - 所有ServiceImpl类必须使用`@Service`注解
+   - 必须指定bean名称，格式：`@Service("模块名.类名")`
+   - 例如：`@Service("patient.patientTagServiceImpl")`、`@Service("tag.tagServiceImpl")`
+
+2. **实现接口（可选）**
+   - 可以实现对应的Service接口，也可以不实现
+   - 如果实现接口，使用`implements XxxService`
+   - 实现接口的方法必须使用`@Override`注解
+
+### 类结构
+
+```java
+@Service("模块名.类名ServiceImpl")
+public class XxxServiceImpl implements XxxService {
+    
+    @Resource(name = "模块名.dao名称")
+    private XxxDao xxxDao;
+    
+    @DubboReference(check = false)
+    private XxxDubboService xxxDubboService;
+}
+```
+
+**规范要求：**
+- 使用`@Resource`注入Dao，必须指定bean名称，格式：`@Resource(name = "模块名.dao名称")`
+- 使用`@DubboReference`注入Dubbo服务，`check`属性默认设置为`false`
+- 字段使用`private`修饰符
+
+### 类注释
+
+```java
+/**
+ * @ClassNme XxxServiceImpl
+ * @Desc TODO
+ * @Author 作者
+ * @Date 日期
+ **/
+```
+
+## 方法级别规范
+
+### 方法命名规范
+
+| 操作类型 | 方法命名 | 示例 |
+|---------|---------|------|
+| 新增 | saveXxx | saveTag, saveTemplate |
+| 更新 | updateXxx | updateTag, updateTemplate |
+| 删除 | deleteXxx | deleteTag, deleteTemplate |
+| 查询单个 | getXxx / selectXxx | getTagById, selectTagByCode |
+| 查询列表 | findXxxList / queryXxxList | findTagList, queryPage |
+| 分页查询 | findXxxList / pageXxx | findTemplateList, pageTagKeywords |
+
+### 方法注释
+
+```java
+/**
+ * 功能描述
+ * @param request 参数说明
+ * @return 返回值说明
+ */
+```
+
+## 数据操作规范
+
+### 新增操作
+
+**规范要求：**
+- 新增操作必须调用Dubbo服务，保证事务一致性
+- 如果不需要事务，可以直接调用Dao
+
+```java
+/**
+ * 保存模版（新增）
+ */
+@Override
+public Integer saveTemplate(FollowPlanTemplateRequest request) {
+    // 生成编码等预处理
+    Long templateCode = generateTemplateCode();
+    // 构建DTO对象
+    FollowPlanTemplateWithTasksRequest dtoRequest = buildTemplateWithTasksRequest(request, templateCode);
+    // 调用 dubbo 服务，保证事务
+    DataTransferObject<Integer> result = followPlanTemplateWriteService.saveTemplateWithTasks(dtoRequest);
+    if (!result.checkSuccess()) {
+        throw new RuntimeException(result.getMsg());
+    }
+    return result.getData();
+}
+```
+
+**简单新增（不需要事务）：**
+
+```java
+/**
+ * 保存患者标签
+ */
+public Integer saveTag(PatientTagEntity entity) {
+    return patientTagDao.saveTag(entity);
+}
+```
+
+### 更新操作
+
+**规范要求：**
+- 更新操作必须调用Dubbo服务，保证事务一致性
+- 更新前应先查询验证数据是否存在
+
+```java
+/**
+ * 更新模版（编辑）
+ */
+@Override
+public Integer updateTemplate(FollowPlanTemplateRequest request) {
+    if (request.getId() == null) {
+        throw new RuntimeException("模版ID不能为空");
+    }
+    // 先从读库查一遍，保证存在
+    FollowPlanTemplateEntity entity = followPlanTemplateDao.selectTemplateById(request.getId());
+    if (entity == null) {
+        throw new RuntimeException("模版不存在");
+    }
+    // 构建请求对象
+    FollowPlanTemplateWithTasksRequest dtoRequest = buildTemplateWithTasksRequest(request, entity.getTemplateCode());
+    // 调用 dubbo 服务，保证事务
+    DataTransferObject<Void> result = followPlanTemplateWriteService.updateTemplateWithTasks(dtoRequest);
+    if (!result.checkSuccess()) {
+        throw new RuntimeException(result.getMsg());
+    }
+    return 1;
+}
+
+### 查询操作
+
+**规范要求：**
+- 查询操作直接调用Dao
+- 单个查询返回Entity或VO
+- 列表查询返回List或PagingResult
+
+```java
+/**
+ * 根据code查标签
+ */
+public PatientTagEntity selectTagByCode(String code) {
+    return patientTagDao.selectTagByCode(code);
+}
+
+/**
+ * 根据ID查询模版详情
+ */
+@Override
+public FollowPlanTemplateDetailVo getTemplateDetail(Integer id) {
+    FollowPlanTemplateEntity entity = followPlanTemplateDao.selectTemplateById(id);
+    if (entity == null) {
+        return null;
+    }
+    // 转换为VO
+    FollowPlanTemplateDetailVo vo = new FollowPlanTemplateDetailVo();
+    vo.setId(entity.getId());
+    vo.setTemplateCode(entity.getTemplateCode());
+    vo.setTemplateName(entity.getTemplateName());
+    // ... 其他字段
+    return vo;
+}
+```
+
+### 分页查询规范
+
+**规范要求：**
+- 分页查询必须写在本地，不能调用Dubbo服务
+- 返回`PagingResult<T>`类型
+- 可以在Service层进行数据补充（如关联数据统计）
+
+```java
+/**
+ * 模版列表分页查询
+ */
+@Override
+public PagingResult<FollowPlanTemplateListVo> findTemplateList(FollowPlanTemplateListRequest request) {
+    PagingResult<FollowPlanTemplateListVo> result = followPlanTemplateDao.findTemplateList(request);
+    // 填充关联数据
+    if (result != null && result.getList() != null) {
+        for (FollowPlanTemplateListVo vo : result.getList()) {
+            vo.setDoctorCount(followPlanTemplateDao.countDoctorByTemplateCode(vo.getTemplateCode()));
+            vo.setPatientCount(followPlanTemplateDao.countPatientByTemplateCode(vo.getTemplateCode()));
+        }
+    }
+    return result;
+}
+```
+
+**简单分页查询：**
+
+```java
+/**
+ * 标签列表分页查询
+ */
+public PagingResult<PatientTagEntity> findTagList(TagListRequest tagRequest) {
+    return patientTagDao.findTagList(tagRequest);
+}
+```
+
+## 对象转换规范
+
+### 使用BeanUtils进行属性拷贝
+
+```java
+import org.springframework.beans.BeanUtils;
+
+// Request转Entity
+TagEntity tagEntity = new TagEntity();
+BeanUtils.copyProperties(request, tagEntity);
+
+// Entity转VO
+FollowPlanTemplateDetailVo vo = new FollowPlanTemplateDetailVo();
+BeanUtils.copyProperties(entity, vo);
+```
+
+### 手动属性映射
+
+当需要特殊处理或字段名不一致时，手动设置属性：
+
+```java
+FollowPlanTemplateDetailVo vo = new FollowPlanTemplateDetailVo();
+vo.setId(entity.getId());
+vo.setTemplateCode(entity.getTemplateCode());
+vo.setTemplateName(entity.getTemplateName());
+// ... 其他字段
+```
+
+## 私有辅助方法
+
+**规范要求：**
+- 复杂的业务逻辑可以抽取为私有方法
+- 私有方法用于代码复用和逻辑清晰
+
+```java
+/**
+ * 构建包含任务和子任务的请求对象
+ */
+private FollowPlanTemplateWithTasksRequest buildTemplateWithTasksRequest(
+        FollowPlanTemplateRequest request, Long templateCode) {
+    FollowPlanTemplateWithTasksRequest dtoRequest = new FollowPlanTemplateWithTasksRequest();
+    dtoRequest.setId(request.getId());
+    dtoRequest.setTemplateCode(templateCode);
+    dtoRequest.setTemplateName(request.getTemplateName());
+    // ... 其他字段设置
+    return dtoRequest;
+}
+
+/**
+ * 生成模版编码
+ */
+private Long generateTemplateCode() {
+    return globalIDGenService.genPreemptionCode();
+}
+
+/**
+ * 获取当前操作人ID
+ */
+private String getCurrentOperatorId() {
+    AuthContextAttributes authContextAttributes = AuthContextHolder.currentAuthContextAttributes();
+    return authContextAttributes.getUsername();
+}
+```
+
+## Dubbo服务调用规范
+
+### 注解使用
+
+```java
+@DubboReference(check = false)
+private FollowPlanTemplateWriteService followPlanTemplateWriteService;
+
+@DubboReference(check = false)
+private GlobalIDGenService globalIDGenService;
+```
+
+### 调用规范
+
+1. **新增和更新接口必须调用Dubbo服务**
+2. **调用Dubbo服务后必须检查返回结果**
+3. **调用Dubbo服务后必须打印日志（可选）**
+
+```java
+// 调用Dubbo服务示例
+DataTransferObject<Integer> result = followPlanTemplateWriteService.saveTemplateWithTasks(dtoRequest);
+if (!result.checkSuccess()) {
+    throw new RuntimeException(result.getMsg());
+}
+return result.getData();
+```
+
+## 异常处理规范
+
+**规范要求：**
+- ServiceImpl层不捕获异常，让异常向上抛出
+- 使用`RuntimeException`抛出业务异常
+- 异常信息要清晰明确
+
+```java
+if (request.getId() == null) {
+    throw new RuntimeException("模版ID不能为空");
+}
+
+FollowPlanTemplateEntity entity = followPlanTemplateDao.selectTemplateById(request.getId());
+if (entity == null) {
+    throw new RuntimeException("模版不存在");
+}
+
+DataTransferObject<Void> result = followPlanTemplateWriteService.updateTemplateWithTasks(dtoRequest);
+if (!result.checkSuccess()) {
+    throw new RuntimeException(result.getMsg());
+}
+```
+
+## 完整示例
+
+### 简单ServiceImpl示例
+
+```java
+/**
+ * <p>患者标签服务实现类</p>
+ */
+@Service("patient.patientTagServiceImpl")
+public class PatientTagServiceImpl {
+    
+    @Resource(name = "patient.patientTagDao")
+    private PatientTagDao patientTagDao;
+
+    /**
+     * 保存患者标签
+     */
+    public Integer saveTag(PatientTagEntity entity) {
+        return patientTagDao.saveTag(entity);
+    }
+
+    /**
+     * 编辑患者标签
+     */
+    public Integer updateTag(PatientTagEntity entity) {
+        return patientTagDao.updateTag(entity);
+    }
+
+    /**
+     * 删除患者标签
+     */
+    public Integer deleteTag(Integer id) {
+        return patientTagDao.deleteTag(id);
+    }
+
+    /**
+     * 根据code查标签
+     */
+    public PatientTagEntity selectTagByCode(String code) {
+        return patientTagDao.selectTagByCode(code);
+    }
+
+    /**
+     * 标签列表分页查询
+     */
+    public PagingResult<PatientTagEntity> findTagList(TagListRequest tagRequest) {
+        return patientTagDao.findTagList(tagRequest);
+    }
+
+    /**
+     * 标签列表
+     */
+    public List<TagListVo> patientTags() {
+        return patientTagDao.patientTags();
+    }
+}
+```
+
+### 复杂ServiceImpl示例（调用Dubbo服务）
+
+```java
+/**
+ * <p>随访计划模版服务实现类</p>
+ */
+@Service("patient.followPlanTemplateServiceImpl")
+public class FollowPlanTemplateServiceImpl implements FollowPlanTemplateService {
+
+    @Resource(name = "patient.followPlanTemplateDao")
+    private FollowPlanTemplateDao followPlanTemplateDao;
+
+    @DubboReference(check = false)
+    private FollowPlanTemplateWriteService followPlanTemplateWriteService;
+
+    @DubboReference(check = false)
+    private GlobalIDGenService globalIDGenService;
+
+    /**
+     * 保存模版（新增）
+     */
+    @Override
+    public Integer saveTemplate(FollowPlanTemplateRequest request) {
+        // 生成模版编码
+        Long templateCode = generateTemplateCode();
+        // 构建请求对象
+        FollowPlanTemplateWithTasksRequest dtoRequest = buildTemplateWithTasksRequest(request, templateCode);
+        // 调用 dubbo 服务，保证事务
+        DataTransferObject<Integer> result = followPlanTemplateWriteService.saveTemplateWithTasks(dtoRequest);
+        if (!result.checkSuccess()) {
+            throw new RuntimeException(result.getMsg());
+        }
+        return result.getData();
+    }
+
+    /**
+     * 更新模版（编辑）
+     */
+    @Override
+    public Integer updateTemplate(FollowPlanTemplateRequest request) {
+        if (request.getId() == null) {
+            throw new RuntimeException("模版ID不能为空");
+        }
+        // 更新模版主表（先从读库查一遍，保证存在）
+        FollowPlanTemplateEntity entity = followPlanTemplateDao.selectTemplateById(request.getId());
+        if (entity == null) {
+            throw new RuntimeException("模版不存在");
+        }
+        // 构建请求对象
+        FollowPlanTemplateWithTasksRequest dtoRequest = buildTemplateWithTasksRequest(request, entity.getTemplateCode());
+        // 调用 dubbo 服务，保证事务
+        DataTransferObject<Void> result = followPlanTemplateWriteService.updateTemplateWithTasks(dtoRequest);
+        if (!result.checkSuccess()) {
+            throw new RuntimeException(result.getMsg());
+        }
+        return 1;
+    }
+
+    /**
+     * 删除模版
+     */
+    @Override
+    public Integer deleteTemplate(Integer id) {
+        return followPlanTemplateDao.deleteTemplate(id);
+    }
+
+    /**
+     * 根据ID查询模版详情
+     */
+    @Override
+    public FollowPlanTemplateDetailVo getTemplateDetail(Integer id) {
+        FollowPlanTemplateEntity entity = followPlanTemplateDao.selectTemplateById(id);
+        if (entity == null) {
+            return null;
+        }
+        FollowPlanTemplateDetailVo vo = new FollowPlanTemplateDetailVo();
+        vo.setId(entity.getId());
+        vo.setTemplateCode(entity.getTemplateCode());
+        vo.setTemplateName(entity.getTemplateName());
+        // ... 其他字段
+        return vo;
+    }
+
+    /**
+     * 模版列表分页查询
+     */
+    @Override
+    public PagingResult<FollowPlanTemplateListVo> findTemplateList(FollowPlanTemplateListRequest request) {
+        PagingResult<FollowPlanTemplateListVo> result = followPlanTemplateDao.findTemplateList(request);
+        // 填充关联数据
+        if (result != null && result.getList() != null) {
+            for (FollowPlanTemplateListVo vo : result.getList()) {
+                vo.setDoctorCount(followPlanTemplateDao.countDoctorByTemplateCode(vo.getTemplateCode()));
+                vo.setPatientCount(followPlanTemplateDao.countPatientByTemplateCode(vo.getTemplateCode()));
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 构建包含任务和子任务的请求对象
+     */
+    private FollowPlanTemplateWithTasksRequest buildTemplateWithTasksRequest(
+            FollowPlanTemplateRequest request, Long templateCode) {
+        FollowPlanTemplateWithTasksRequest dtoRequest = new FollowPlanTemplateWithTasksRequest();
+        dtoRequest.setId(request.getId());
+        dtoRequest.setTemplateCode(templateCode);
+        dtoRequest.setTemplateName(request.getTemplateName());
+        // ... 其他字段设置
+        return dtoRequest;
+    }
+
+    /**
+     * 生成模版编码
+     */
+    private Long generateTemplateCode() {
+        return globalIDGenService.genPreemptionCode();
+    }
+}
+```
+
+### 多表操作示例
+
+```java
+/**
+ * 保存标签规则关键词（涉及多表操作）
+ */
+public Integer saveTagRuleKeyword(TagRulekeywordRequest request) {
+    int num = 0;
+    // 保存标签表
+    TagEntity tagEntity = new TagEntity();
+    BeanUtils.copyProperties(request, tagEntity);
+    num += tagDao.saveTag(tagEntity);
+    // 保存规则关键词表
+    TagRuleKeywordEntity tagRuleKeywordEntity = new TagRuleKeywordEntity();
+    BeanUtils.copyProperties(request, tagRuleKeywordEntity);
+    num += tagRuleKeywordDao.save(tagRuleKeywordEntity);
+    return num;
+}
+```
+
+## 关键注意事项
+
+1. **Bean名称规范**：`@Service`和`@Resource`必须指定bean名称，格式为"模块名.类名"
+2. **新增更新走Dubbo**：后台的新增和更新接口都需要走dubbo服务，保证事务一致性
+3. **分页查询本地化**：后台的分页查询接口都需要写在本地，不能调用dubbo服务
+4. **异常向上抛出**：ServiceImpl层不捕获异常，让异常向上抛出到Controller层处理
+5. **对象转换**：使用`BeanUtils.copyProperties`进行对象属性拷贝，特殊情况下手动映射
+6. **私有方法**：复杂逻辑抽取为私有方法，提高代码可读性
+7. **数据验证**：更新操作前应先查询验证数据是否存在
+8. **返回类型**：查询单个返回Entity或VO，查询列表返回List或PagingResult
+9. **字段修饰符**：Dao和Dubbo服务使用`private`修饰符
+10. **方法注释**：所有公共方法必须添加注释说明
+
+## 常用工具类
+
+### BeanUtils工具类
+
+```java
+import org.springframework.beans.BeanUtils;
+
+// 对象属性拷贝
+BeanUtils.copyProperties(source, target);
+```
+
+### Check工具类（用于数据验证）
+
+```java
+import com.jk.framework.base.utils.Check;
+
+Check.NuNObj(obj)          // 检查对象是否为null
+Check.NuNStr(str)          // 检查字符串是否为null或空
+Check.NuNCollection(list)  // 检查集合是否为null或空
+```

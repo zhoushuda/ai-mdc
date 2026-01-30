@@ -1,0 +1,397 @@
+---
+enabled: true
+name: controller
+description: web-api项目Controller接口开发规范
+---
+
+# Controller接口开发规范
+
+## 类级别规范
+
+### 注解使用
+
+1. **@RestController**
+   - 所有Controller类必须使用`@RestController`注解
+   - 该注解已包含`@ResponseBody`，无需重复添加
+
+2. **@RequestMapping**
+   - 类级别必须使用`@RequestMapping`定义基础路径
+   - 路径格式：`"api/{模块名}"`，例如：`"api/patient"`、`"api/ruleKeyword"`、`"api/followPlanTemplate"`
+   - 路径使用小写字母，多个单词使用驼峰命名
+
+### 类结构
+
+```java
+@Sl4j
+@RestController
+@RequestMapping("api/{模块名}")
+public class XxxController {
+    private static final Logger LOGGER = LoggerFactory.getLogger(XxxController.class);
+    
+    @Autowired
+    // 或 @Resource(name = "xxx")
+    private XxxService xxxService;
+}
+```
+
+**规范要求：**
+- Service注入使用`@Autowired`或`@Resource`
+- 使用`@Resource`时需指定bean名称：`@Resource(name = "xxx.xxxServiceImpl")`
+
+### 类注释
+
+```java
+/**
+ * @ClassNme XxxController
+ * @Desc TODO
+ * @Author 作者
+ * @Date 日期
+ **/
+```
+
+## 方法级别规范
+
+### 请求映射注解
+
+1. **@RequestMapping**
+   - 必须明确指定请求方式：`method = RequestMethod.GET` 或 `method = RequestMethod.POST`
+   - GET请求用于查询操作
+   - POST请求用于新增、更新、复杂查询（如分页查询）
+
+
+### 方法命名规范
+
+| 操作类型 | 方法命名 | 示例 |
+|---------|---------|------|
+| 新增 | saveXxx | saveTag, saveTemplate |
+| 更新 | updateXxx | updateTag, updateTemplate |
+| 删除 | deleteXxx | deleteTag, deleteTemplate |
+| 查询单个 | getXxx / getXxxDetail | getTemplateDetail |
+| 查询列表 | xxxList / findXxxList | tagList, templateList |
+| 导出 | xxxExcel | patientExcel |
+
+### 参数处理
+
+#### 简单参数（GET请求）
+
+```java
+@RequestMapping(value = "deleteTemplate", method = RequestMethod.GET)
+public ResponseDto deleteTemplate(@RequestParam Integer id) {
+    // ...
+}
+```
+
+#### 复杂对象（POST请求）
+
+```java
+@RequestMapping(value = "saveTemplate", method = RequestMethod.POST)
+public ResponseDto saveTemplate(@RequestBody FollowPlanTemplateRequest request) {
+    // ...
+}
+```
+ 
+
+**规范要求：**
+- GET请求的简单参数使用`@RequestParam`
+- POST请求的复杂对象使用`@RequestBody`
+- GET请求的简单对象可直接接收（Spring会自动绑定）
+
+### 参数验证
+
+**必须使用Check工具类进行参数验证：**
+
+```java
+// 对象为空检查
+if (Check.NuNObj(request)) {
+    return new ResponseDto("参数错误");
+}
+
+// 字符串为空检查
+if (Check.NuNStr(request.getTagName())) {
+    return new ResponseDto("标签名称不能为空");
+}
+
+// 集合为空检查
+if (Check.NuNCollection(list)) {
+    // ...
+}
+```
+
+**验证顺序：**
+1. 首先检查对象是否为null
+2. 然后检查必填字段
+3. 最后检查业务规则（如长度限制、格式验证等）
+
+### 返回值规范
+
+**所有方法必须返回`ResponseDto`类型：**
+
+```java
+// 成功返回（无数据）
+return new ResponseDto();
+
+// 成功返回（有数据）
+DataTransferObject<PageResult> dto = new DataTransferObject<>();
+dto.setData(pageResult);
+return new ResponseDto(dto);
+
+// 失败返回
+return new ResponseDto("错误信息");
+```
+
+### 分页查询规范
+
+```java
+@RequestMapping(value = "templateList", method = RequestMethod.POST)
+public ResponseDto templateList(@RequestBody FollowPlanTemplateListRequest request) {
+    DataTransferObject<PageResult<FollowPlanTemplateListVo>> dto = new DataTransferObject<>();
+    PageResult<FollowPlanTemplateListVo> pageResult = new PageResult<>();
+    try {
+        PagingResult<FollowPlanTemplateListVo> result = followPlanTemplateService.findTemplateList(request);
+        pageResult.setRows(result.getList());
+        pageResult.setTotal(result.getTotal());
+        dto.setData(pageResult);
+    } catch (Exception e) {
+        LogUtil.error(LOGGER, "查询模版列表异常:{}", e);
+        return new ResponseDto("查询模版列表异常");
+    }
+    return new ResponseDto(dto);
+}
+```
+
+**规范要求：**
+- 分页查询必须写在本地Service，不能调用Dubbo服务
+- 使用`PageResult`包装分页数据
+- 使用`DataTransferObject`包装`PageResult`
+- 使用`PagingResult`接收Service返回的分页结果
+
+### 异常处理
+
+**不需要使用try-catch捕获异常并记录日志：**
+
+**规范要求：**
+- 使用`log.error`记录异常日志
+- 返回用户友好的错误信息
+
+### 方法注释
+
+```java
+/**
+ * 功能描述
+ * @param request 参数说明
+ * @return 返回值说明
+ */
+```
+
+或使用详细格式：
+
+```java
+/**
+ * @param
+ * @author:作者
+ * @date:日期
+ * @description:功能描述
+ **/
+```
+
+## Dubbo服务调用规范
+
+### 注解使用
+
+```java
+@DubboReference(check = false)
+private GenericInfoService genericInfoService;
+```
+
+**规范要求：**
+- 使用`@DubboReference`注解注入Dubbo服务
+- `check`属性默认设置为`false`
+
+### 调用规范
+
+1. **新增和更新接口必须调用Dubbo服务**
+2. **分页查询接口必须写在本地，不能调用Dubbo服务**
+3. **调用Dubbo服务后必须打印日志**
+
+```java
+// 调用Dubbo服务示例
+GenericQueryResponseVo result = genericInfoService.getGenericInfoFromGZById(request.getGenericId());
+log.info("调用Dubbo服务获取通用信息，结果:{}", result);
+return result.trans2Res();
+```
+
+## 数据对象规范
+
+所有的数据对象都添加@Data@NoArgsConstructor
+默认继承BaseEntity对象
+
+### Request对象
+
+- 位置：`request`包下
+- 命名：`XxxRequest`，如`TagRequest`、`FollowPlanTemplateRequest`
+- 用于接收前端请求参数
+
+### VO对象
+
+- 位置：`vo`包下
+- 命名：`XxxVo`，如`TagListVo`、`FollowPlanTemplateDetailVo`
+- 用于返回给前端的数据对象
+
+### Entity对象
+
+- 位置：`entity`包下
+- 命名：`XxxEntity`，如`PatientTagEntity`、`TagEntity`
+- 用于数据库实体映射
+
+### DTO对象
+
+- 传递给Dubbo服务的数据对象
+- 返回给前端的对象都是独立的VO，传递给Dubbo服务的是DTO对象
+
+## 完整示例
+
+### 新增接口示例
+
+```java
+/**
+ * 新增标签
+ */
+@RequestMapping(value = "saveTag", method = RequestMethod.POST)
+@ResponseBody
+public ResponseDto saveTag(@RequestBody TagRequest tagRequest) {
+    if (Check.NuNObj(tagRequest)) {
+        return new ResponseDto("参数错误");
+    }
+    if (Check.NuNStr(tagRequest.getTagName())) {
+        return new ResponseDto("标签名称不能为空");
+    }
+    String tagCode = CodeGenUtil.getSn();
+    tagRequest.setTagCode(tagCode);
+    tagService.saveTag(tagRequest);
+    return new ResponseDto();
+}
+```
+
+### 更新接口示例
+
+```java
+/**
+ * 更新标签
+ */
+@RequestMapping(value = "updateTag", method = RequestMethod.POST)
+@ResponseBody
+public ResponseDto updateTag(@RequestBody TagRequest request) {
+    Integer tagId = request.getId();
+    if (Check.NuNObj(tagId) || Check.NuNStr(request.getTagName())
+            || Check.NuNStr(request.getKeyword())) {
+        return new ResponseDto("参数错误");
+    }
+    TagEntity sourceTag = tagService.getTagById(tagId);
+    if (Check.NuNObj(sourceTag)) {
+        return new ResponseDto("不存在当前被修改的标签!");
+    }
+    tagService.updateTag(request);
+    return new ResponseDto();
+}
+```
+
+### 删除接口示例
+
+```java
+/**
+ * 删除标签
+ */
+@RequestMapping(value = "deleteTag", method = RequestMethod.GET)
+public ResponseDto deleteTag(@RequestParam Integer id) {
+    if (Check.NuNObj(id)) {
+        return new ResponseDto("参数错误!");
+    }
+    tagService.deleteTag(id);
+    return new ResponseDto();
+}
+```
+
+### 查询详情接口示例
+
+```java
+/**
+ * 查询模版详情
+ */
+@RequestMapping(value = "getTemplateDetail", method = RequestMethod.GET)
+public ResponseDto getTemplateDetail(@RequestParam Integer id) {
+    if (Check.NuNObj(id)) {
+        return new ResponseDto("参数错误");
+    }
+    DataTransferObject<FollowPlanTemplateDetailVo> dto = new DataTransferObject<>();
+    FollowPlanTemplateDetailVo detail = followPlanTemplateService.getTemplateDetail(id);
+    dto.setData(detail);
+    return new ResponseDto(dto);
+}
+```
+
+### 分页查询接口示例
+
+```java
+/**
+ * 模版列表
+ */
+@RequestMapping(value = "templateList", method = RequestMethod.POST)
+public ResponseDto templateList(@RequestBody FollowPlanTemplateListRequest request) {
+    DataTransferObject<PageResult<FollowPlanTemplateListVo>> dto = new DataTransferObject<>();
+    PageResult<FollowPlanTemplateListVo> pageResult = new PageResult<>();
+    PagingResult<FollowPlanTemplateListVo> result = followPlanTemplateService.findTemplateList(request);
+    pageResult.setRows(result.getList());
+    pageResult.setTotal(result.getTotal());
+    dto.setData(pageResult);
+    return new ResponseDto(dto);
+}
+```
+
+### 列表查询接口示例（无分页）
+
+```java
+/**
+ * 标签列表
+ */
+@RequestMapping("tags")
+@ResponseBody
+public ResponseDto patientTags() {
+    ResponseDto dto = new ResponseDto();
+    List<TagListVo> listVos = patientTagService.patientTags();
+    if (!Check.NuNCollection(listVos)) {
+        dto.setData(listVos);
+    }
+    return dto;
+}
+```
+
+## 关键注意事项
+
+1. **请求方式明确**：任何接口都需要明确具体的请求方式（GET/POST）
+2. **返回类型统一**：所有接口返回对象必须是`ResponseDto`
+3. **参数验证必须**：所有接口必须进行参数验证，使用`Check`工具类
+4. **异常处理必须**：所有可能抛出异常的地方必须使用try-catch包裹
+5. **日志记录必须**：异常必须使用`LogUtil.error`记录日志
+6. **分页查询本地化**：后台的分页查询接口都需要写在本地，不能调用dubbo服务
+7. **新增更新走Dubbo**：后台的新增和更新接口都需要走dubbo服务
+8. **Dubbo调用日志**：调用dubbo服务后都需要打印日志
+9. **路径命名规范**：使用小写字母，多个单词使用驼峰命名
+10. **方法命名规范**：遵循save/update/delete/get/find等前缀规范
+11. **尽量使用@lombook注解**：包裹Get/Set/Data等其他注解
+
+## 常用工具类
+
+### Check工具类
+
+```java
+Check.NuNObj(obj)          // 检查对象是否为null
+Check.NuNStr(str)          // 检查字符串是否为null或空
+Check.NuNCollection(list)  // 检查集合是否为null或空
+```
+
+### LogUtil工具类
+
+```java
+log.error("错误信息:{}", e);    // 记录错误日志
+log.info("信息:{}", data);     // 记录信息日志
+```

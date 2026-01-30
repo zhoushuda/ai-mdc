@@ -1,13 +1,14 @@
 ---
 name: service-impl
-description: ServiceImpl服务实现类开发规范
+description: 后台项目ServiceImpl服务实现类开发规范
+globs: **/*ServiceImpl.java
 ---
 
 # ServiceImpl服务实现类开发规范
 
 ## 概述
 
-ServiceImpl是业务逻辑层的实现类，负责处理具体的业务逻辑，调用Dao层进行数据操作，或调用Dubbo服务进行分布式事务处理。
+ServiceImpl是业务逻辑层的实现类，负责处理具体的业务逻辑，调用Dao层进行数据查询操作，增删改调用Dubbo服务
 
 ## 类级别规范
 
@@ -81,38 +82,10 @@ public class XxxServiceImpl implements XxxService {
 ### 新增操作
 
 **规范要求：**
-- 新增操作必须调用Dubbo服务，保证事务一致性
+- 新增，修改操作必须调用Dubbo服务，保证事务一致性
+- 请询问我dubbo服务代码的编写路径
 - 如果不需要事务，可以直接调用Dao
 
-```java
-/**
- * 保存模版（新增）
- */
-@Override
-public Integer saveTemplate(FollowPlanTemplateRequest request) {
-    // 生成编码等预处理
-    Long templateCode = generateTemplateCode();
-    // 构建DTO对象
-    FollowPlanTemplateWithTasksRequest dtoRequest = buildTemplateWithTasksRequest(request, templateCode);
-    // 调用 dubbo 服务，保证事务
-    DataTransferObject<Integer> result = followPlanTemplateWriteService.saveTemplateWithTasks(dtoRequest);
-    if (!result.checkSuccess()) {
-        throw new RuntimeException(result.getMsg());
-    }
-    return result.getData();
-}
-```
-
-**简单新增（不需要事务）：**
-
-```java
-/**
- * 保存患者标签
- */
-public Integer saveTag(PatientTagEntity entity) {
-    return patientTagDao.saveTag(entity);
-}
-```
 
 ### 更新操作
 
@@ -120,29 +93,6 @@ public Integer saveTag(PatientTagEntity entity) {
 - 更新操作必须调用Dubbo服务，保证事务一致性
 - 更新前应先查询验证数据是否存在
 
-```java
-/**
- * 更新模版（编辑）
- */
-@Override
-public Integer updateTemplate(FollowPlanTemplateRequest request) {
-    if (request.getId() == null) {
-        throw new RuntimeException("模版ID不能为空");
-    }
-    // 先从读库查一遍，保证存在
-    FollowPlanTemplateEntity entity = followPlanTemplateDao.selectTemplateById(request.getId());
-    if (entity == null) {
-        throw new RuntimeException("模版不存在");
-    }
-    // 构建请求对象
-    FollowPlanTemplateWithTasksRequest dtoRequest = buildTemplateWithTasksRequest(request, entity.getTemplateCode());
-    // 调用 dubbo 服务，保证事务
-    DataTransferObject<Void> result = followPlanTemplateWriteService.updateTemplateWithTasks(dtoRequest);
-    if (!result.checkSuccess()) {
-        throw new RuntimeException(result.getMsg());
-    }
-    return 1;
-}
 
 ### 查询操作
 
@@ -343,27 +293,6 @@ public class PatientTagServiceImpl {
     private PatientTagDao patientTagDao;
 
     /**
-     * 保存患者标签
-     */
-    public Integer saveTag(PatientTagEntity entity) {
-        return patientTagDao.saveTag(entity);
-    }
-
-    /**
-     * 编辑患者标签
-     */
-    public Integer updateTag(PatientTagEntity entity) {
-        return patientTagDao.updateTag(entity);
-    }
-
-    /**
-     * 删除患者标签
-     */
-    public Integer deleteTag(Integer id) {
-        return patientTagDao.deleteTag(id);
-    }
-
-    /**
      * 根据code查标签
      */
     public PatientTagEntity selectTagByCode(String code) {
@@ -430,7 +359,7 @@ public class FollowPlanTemplateServiceImpl implements FollowPlanTemplateService 
             throw new RuntimeException("模版ID不能为空");
         }
         // 更新模版主表（先从读库查一遍，保证存在）
-        FollowPlanTemplateEntity entity = followPlanTemplateDao.selectTemplateById(request.getId());
+        FollowPlanTemplateEntity entity = followPlanTemplateWriteService.selectTemplateById(request.getId());
         if (entity == null) {
             throw new RuntimeException("模版不存在");
         }
@@ -449,7 +378,7 @@ public class FollowPlanTemplateServiceImpl implements FollowPlanTemplateService 
      */
     @Override
     public Integer deleteTemplate(Integer id) {
-        return followPlanTemplateDao.deleteTemplate(id);
+        return followPlanTemplateWriteService.deleteTemplate(id);
     }
 
     /**

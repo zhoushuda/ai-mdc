@@ -1,0 +1,205 @@
+---
+enabled: true
+name: dubbo-service-impl-layer-rules
+description: dubbo项目ServiceImpl 层开发规范
+---
+
+## ServiceImpl 层（领域业务 + DAO 封装）开发规范
+
+---
+
+### 一、定位与职责
+
+#### 1.1 ServiceImpl 的定位
+
+- 位于 **对外 Proxy 层** 与 **底层 DAO / 其他领域组件** 之间：
+  - 负责 **领域内业务逻辑 + DAO 调用封装**；
+  - 可以适度组合多表查询、写入，形成面向业务的中等粒度方法。
+- 一个 ServiceImpl 通常对应一个清晰的业务领域：
+  - `MallOrderServiceImpl`：商城订单相关业务
+  - `OrderRefundServiceImpl`：订单退款相关业务
+  - `UserDeliveryServiceImpl`：用户收货信息相关业务
+
+#### 1.2 ServiceImpl 能做什么
+
+- 封装 **单表 / 多表查询和更新**。
+- 聚合多个 DAO、其他 ServiceImpl / Manager 调用，完成一个完整业务操作。
+- 提供面向上层 Proxy / 其他 Service 的业务方法：
+  - 如：`insertBatch`、`getMallOrderVo`、`getMallRewardsList` 等。
+
+#### 1.3 ServiceImpl 不应该做什么
+
+- 不直接和 Dubbo / Controller 打交道（由 Proxy / Web 层承接）。
+- 不负责返回 `DataTransferObject<T>`，只返回实体 / 集合 / 基础类型。
+- 不输出面向前端的错误文案和错误码（由上层统一封装）。
+
+---
+
+### 二、类与方法规范
+
+#### 2.1 类注解与命名
+
+- 使用 `@Service` 注解，并统一在 BeanName 前增加 `order.` 前缀：
+
+```java
+@Service("order.mallOrderServiceImpl")
+public class MallOrderServiceImpl {
+    // ...
+}
+```
+
+- 命名规则：
+  - 统一以 `ServiceImpl` 结尾：`MallOrderServiceImpl`、`OrderRefundServiceImpl` 等；
+  - 如有对应的 Service 接口，命名为 `XXXService` + `XXXServiceImpl`。
+
+#### 2.2 方法命名规范
+
+- **查询类方法**：
+  - `getXXX` / `listXXX` / `queryXXX` / `findXXX` 等，语义要清晰。
+- **保存更新方法**：
+  - `insertXXX` / `insertBatchXXX` / `updateXXX` / `deleteXXX`。
+- **返回值**：
+  - 返回实体、集合或基础类型，不包装 `DataTransferObject`。
+
+---
+
+### 三、数据与组件访问规范
+
+#### 3.1 与 DAO 的协作
+
+- ServiceImpl 持有 DAO 引用，通过 `@Resource` / `@Autowired` 注入：
+
+```java
+@Resource(name = "order.mallOrderDao")
+private MallOrderDao mallOrderDao;
+```
+
+- 查询流程：
+  - 直接调用 DAO / Mapper 获取实体 / 列表。
+- 更新流程：
+  - 更新 DB 后，再处理缓存（清除或更新）。
+
+#### 3.2 Redis / 缓存规范
+
+- 如涉及 Redis 等缓存组件，可在 ServiceImpl 内集中处理与该领域相关的缓存操作：
+  - 读缓存 → 数据库 → 回写缓存的完整流程。
+
+```java
+public MallOrderVo getMallOrderByCodeWithCache(String orderCode) {
+    String ruleCacheKey = MallOrderConstant.MALL_ORDER_CACHE_KEY_PRE + orderCode;
+    String ruleJson = redisOperations.get(ruleCacheKey);
+    if (!Check.NuNStr(ruleJson)) {
+        return JsonEntityTransform.json2Object(ruleJson, MallOrderVo.class);
+    }
+    MallOrderVo vo = mallOrderDao.selectVoByOrderCode(orderCode);
+    if (!Check.NuNObj(vo)) {
+        redisOperations.set(ruleCacheKey, JsonEntityTransform.Object2Json(vo));
+    }
+    return vo;
+}
+```
+
+---
+
+### 四、参数与返回值规范
+
+#### 4.1 参数
+
+- 入参优先使用 **Request / DTO / 关键 ID 集合**：
+  - 如：`MallOrderRequest`、`MallRewardsRequest`、`List<Integer> ids`。
+- 参数校验：
+  - ServiceImpl 层可以适度使用 `Check` 做空值 / 集合判空判断：
+
+```java
+if (Check.NuNObjs(request) || Check.NuNStrStrict(request.getOrderCode())) {
+    throw new IllegalArgumentException("orderCode is null");
+}
+```
+
+- 具体返回给调用方的文案和错误码，由上层 Proxy / Facade / 统一 Service 封装。
+
+#### 4.2 返回值
+
+- 返回实体 / 列表 / Map / 基本类型：
+  - `MallOrderVo` / `MallRewardsEntity` / `int` 等。
+- 对于多字段组合结果，可返回专门的 DTO：
+  - 如项目中的各类 `XXXDTO`。
+
+---
+
+### 五、错误处理与日志
+
+#### 5.1 错误处理
+
+- ServiceImpl 层一般不直接构造面向前端的业务错误文案：
+  - 校验失败可以抛出 `IllegalArgumentException` / 自定义运行时异常；
+  - 上层决定是否转换为 `DataTransferObject` 的错误信息或统一错误码。
+- 访问 DB / 缓存异常：
+  - 允许抛出运行时异常，由上层统一异常处理机制兜底。
+
+#### 5.2 日志
+
+- 建议只在以下场景打印日志：
+  - 关键 SQL 语义操作（如批量更新某类规则）。
+  - 检查到数据状态异常（如重复规则、非法配置）。
+- 日志风格建议与 Proxy 层保持一致：
+
+```java
+log.info("MallOrderServiceImpl.insertBatch 参数:{}", JsonEntityTransform.Object2Json(mallPatientDoctorRefEntityList));
+```
+
+---
+
+### 六、示例：MallOrderServiceImpl 推荐结构
+
+```java
+@Service("order.mallOrderServiceImpl")
+public class MallOrderServiceImpl {
+
+    @Resource(name="order.mallOrderDao")
+    private MallOrderDao mallOrderDao;
+
+    @Resource(name = "order.mallPatientDoctorRefDao")
+    private MallPatientDoctorRefDao mallPatientDoctorRefDao;
+
+    @Resource(name="order.mallRewardsDao")
+    private MallRewardsDao mallRewardsDao;
+
+    public int insertBatch(List<MallPatientDoctorRefEntity> mallPatientDoctorRefEntityList){
+        if (Check.NuNCollection(mallPatientDoctorRefEntityList)) {
+            throw new IllegalArgumentException("mallPatientDoctorRefEntityList is empty");
+        }
+        return this.mallPatientDoctorRefDao.insertBatch(mallPatientDoctorRefEntityList);
+    }
+
+    public List<MallOrderVo> getMallOrderVo(MallOrderRequest mallOrderRequest){
+        return this.mallOrderDao.selectVoBySelective(mallOrderRequest);
+    }
+
+    public List<String> getParentCodeListByCodes(MallOrderRequest mallOrderRequest){
+        return this.mallOrderDao.getParentCodeListByCodes(mallOrderRequest);
+    }
+
+    public int insertBatchMallRewards(List<MallRewardsEntity> list){
+        if (Check.NuNCollection(list)) {
+            throw new IllegalArgumentException("mallRewardsEntityList is empty");
+        }
+        return this.mallRewardsDao.insertBatch(list);
+    }
+
+    public List<MallRewardsEntity> getMallRewardsList(MallRewardsRequest req){
+        return this.mallRewardsDao.getMallRewardsList(req);
+    }
+}
+```
+
+---
+
+### 七、关键注意事项（ServiceImpl 层）
+
+1. ServiceImpl 只对内部 Proxy / 其他 Service 暴露，不直接暴露给 Dubbo / Controller。
+2. 不使用 `DataTransferObject`，也不输出对前端的错误文案。
+3. 统一封装“DAO + 缓存 + 组件”的组合操作，减少上层重复代码。
+4. 复杂流程可以在 ServiceImpl 内实现，但要注意方法拆分，保持逻辑清晰。
+5. 命名和风格尽量与现有各类 `XXXServiceImpl` 保持一致，保证可读性和可维护性。
+

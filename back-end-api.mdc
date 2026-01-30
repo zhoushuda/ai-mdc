@@ -1,7 +1,8 @@
 ---
 enabled: true
 name: controller
-description: web-api项目Controller接口开发规范
+description: 后台项目Controller接口开发规范
+globs: web-api/**/*Controller.java
 ---
 
 # Controller接口开发规范
@@ -181,17 +182,6 @@ public ResponseDto templateList(@RequestBody FollowPlanTemplateListRequest reque
  * @param request 参数说明
  * @return 返回值说明
  */
-```
-
-或使用详细格式：
-
-```java
-/**
- * @param
- * @author:作者
- * @date:日期
- * @description:功能描述
- **/
 ```
 
 ## Dubbo服务调用规范
@@ -378,6 +368,7 @@ public ResponseDto patientTags() {
 9. **路径命名规范**：使用小写字母，多个单词使用驼峰命名
 10. **方法命名规范**：遵循save/update/delete/get/find等前缀规范
 11. **尽量使用@lombook注解**：包裹Get/Set/Data等其他注解
+12. **所有的增删改必须走dubbo服务，分页查走本地**
 
 ## 常用工具类
 

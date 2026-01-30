@@ -1,0 +1,309 @@
+---
+enabled: true
+name: service-layer-rules
+description: 前端API接口开发规范（Service层开发规范）
+---
+
+## Service 层开发规范
+
+---
+
+### 一、类级别规范
+
+#### 1.1 注解与命名
+
+- **业务 Service**：
+  - 纯业务逻辑类优先使用 `@Service`，如：
+    - `HealthCoinRedeemOrderService`
+    - `OrderHandleService`
+    - `OrderHandleV2Service`
+    - `ServeRecordOrderService`
+  - 通用逻辑 / 工具型 Service 可使用 `@Component`，如：
+    - `OrderCommonLogicService`
+    - `OrderLocalService`
+- **命名规则**：
+  - 以业务场景 + `Service` 结尾，命名直接反映职责：
+    - `OrderCommonLogicService`：订单通用逻辑
+    - `OrderLocalService`：本地订单封装与视图转换
+    - `OrderHandleService` / `OrderHandleV2Service`：订单初始化与下单前校验流程
+    - `HealthCoinRedeemOrderService`：健康币兑换订单
+    - `ServeRecordOrderService`：服务记录相关订单
+
+```java
+@Slf4j
+@Service
+public class HealthCoinRedeemOrderService {
+    // ...
+}
+```
+
+#### 1.2 依赖注入方式
+
+- **内部 Service / 组件**：
+  - 使用 `@Autowired` 注入同域 Service、Wrapper、配置类、工具类等：
+
+```java
+@Autowired
+private OrderCommonLogicService orderCommonLogicService;
+
+@Autowired
+private PrevalenceLogicService prevalenceLogicService;
+```
+
+- **Dubbo / 外部服务**：
+  - 通过 `@Resource(name = "...")` 明确 Bean 名称（统一在 XML 或 Dubbo 配置中声明）：
+
+```java
+@Resource(name = "order.productBaseService")
+private ProductBaseService productBaseService;
+
+@Resource(name = "pay.PaymentMerchantService")
+private PaymentMerchantService paymentMerchantService;
+```
+
+> 要求：不要在 Service 内部手动 new 其他 Service，统一通过 Spring 管理。
+
+---
+
+### 二、职责划分规范
+
+#### 2.1 Controller 与 Service 职责边界
+
+- **Controller**：只负责
+  - 解析 `Header` 和请求参数
+  - 基础参数校验（空值、登录态）
+  - 调用 Service 并把 `DataTransferObject` 统一转换成 `ResponseDto`
+- **Service**：负责
+  - 业务规则校验
+  - 领域模型装配/转换
+  - Dubbo/HTTP 调用、分支逻辑、补偿、回滚等
+
+所有复杂 if/else、循环、限购、优惠券、运费、医保等规则，必须在 Service 层实现，而不是落在 Controller。
+
+#### 2.2 各类 Service 的典型定位
+
+- `OrderCommonLogicService`：
+  - 订单共用逻辑（填充 OrderInsertRequest、收货地址、运费来源、黑名单等）
+  - 提供通用小方法（如 `containsEmojiV2`、`fillOrderReqUser`）
+- `OrderLocalService`：
+  - 订单列表、详情视图转换（`OrderResultVo` -> `OrderListVO` / `OrderDetailInfoVo`）
+  - 退款状态、保险信息、物流信息等聚合
+- `OrderHandleService` / `OrderHandleV2Service`：
+  - 订单初始化主流程（`initOrder`、`initNewOrder`）
+  - 校验处方状态、检查单状态、限购、运费、优惠券、病程服务等
+- `HealthCoinRedeemOrderService`：
+  - 健康币兑换场景下的初始化、下单构造逻辑
+- `ServeRecordOrderService`：
+  - 服务记录订单初始化（如服务包等）
+
+> 新增 Service 时，应优先判断是“通用逻辑类”还是“具体业务流程类”，避免职责混乱。
+
+---
+
+### 三、入参与返回值规范
+
+#### 3.1 入参
+
+- Service 层入参应尽量使用 **DTO / VO / 基本类型**，避免直接依赖 `HttpServletRequest`。
+- 多个关联参数建议组装为单个 DTO，如 `OrderRequestDTO`、`ChecklistOrderRequestDTO` 等。
+- 对于跨服务调用的入参，统一使用对应 Dubbo 接口定义的 Request 类，例如：
+  - `ProductBaseRequest`
+  - `FreightCalculateRequest`
+  - `OrderLimitRequest`
+  - `OrderFillBlackReq`
+
+#### 3.2 返回值
+
+- 统一使用 `DataTransferObject<T>` 作为 Service 层返回包装类型（除非是极简单内部私有方法）。
+- 成功约定：
+
+```java
+DataTransferObject<InitOrderVO> dto = new DataTransferObject<>();
+dto.setData(initOrderVO);
+return dto;
+```
+
+- 失败约定：
+
+```java
+dto.setErrorMsg("当前商品已下架");
+// 如需附带业务编码
+dto.setErrCode(ErrorCodeStatusEnum.E51002.getCode());
+return dto;
+```
+
+Controller 收到 `DataTransferObject` 后，通过 `trans2Res()` 转为统一的 `ResponseDto`。
+
+---
+
+### 四、参数校验与错误码规范
+
+#### 4.1 使用 Check 工具类
+
+- 在 Service 层进行更细粒度校验时，统一使用 `Check`：
+
+```java
+if (Check.NuNCollection(productList)) {
+    dto.setErrorMsg("当前商品已下架");
+    return;
+}
+
+if (Check.NuNObjs(paramRequest, paramRequest.getOrderId(), paramRequest.getConsigneeName())) {
+    dto.setErrorMsg(OrderConstant.INVALID_PARAM);
+    return;
+}
+```
+
+- 常用方法：
+  - `Check.NuNObj(obj)` / `Check.NuNObjs(...)`
+  - `Check.NuNStr(str)` / `Check.NuNStrStrict(str)`
+  - `Check.NuNCollection(list)` / `Check.NuNMap(map)`
+
+#### 4.2 业务错误码与枚举
+
+- 对于需要前端区分处理的错误，设置业务枚举 Code：
+  - 处方 & 检查单状态：`OrderReturnCode`、`ChecklistOrderReturnCode`
+  - 订单跳转列表：`CommonReturnCode.ORDER_JUMP_LIST_NO_PAY`
+  - 地址、限购等：`ErrorCodeStatusEnum`
+
+```java
+dto.setErrCode(ChecklistOrderReturnCode.CHECKLIST_YIZHIFU.getCode());
+dto.setErrorMsg(ChecklistOrderReturnCode.CHECKLIST_YIZHIFU.getDesc());
+```
+
+> 要求：不要在 Service 里直接拼硬编码数字状态码，优先使用已有枚举。
+
+---
+
+### 五、Dubbo / HTTP 调用规范
+
+#### 5.1 Dubbo 调用
+
+- 调用 Dubbo 服务时统一使用其 `DataTransferObject` 返回值，先判断 `checkSuccess()` 再使用数据：
+
+```java
+DataTransferObject<List<ProductBaseEntity>> productBaseDto = productBaseService.getProductList(req);
+if (!productBaseDto.checkSuccess()) {
+    dto.setErrorMsg(productBaseDto.getMsg());
+    return null;
+}
+List<ProductBaseEntity> productList = productBaseDto.getData();
+```
+
+- 对多次调用的场景，避免重复拼装请求对象，尽量复用已有 DTO。
+
+#### 5.2 HTTP 调用（对外系统）
+
+- 统一使用 `CloseableHttpUtil` + `JsonEntityTransform`，并加 Header 认证：
+
+```java
+ResponseEntity responseEntity = CloseableHttpUtil.sendPostJson(
+        url,
+        JsonEntityTransform.Object2Json(par),
+        HeaderUtil.getHeaderAuth(orderConstant.BASIC_AUTH, orderConstant.BASIC_PWD)
+);
+Map<String, Object> res = JsonEntityTransform.json2Object(responseEntity.getBody(), Map.class);
+```
+
+- 调用失败时，打印日志并设置友好错误信息：
+
+```java
+if (res == null || res.isEmpty()) {
+    dto.setErrorMsg("补开发票失败");
+    return;
+}
+boolean dealStatus = (Boolean) res.get("success");
+if (!dealStatus) {
+    dto.setErrorMsg(String.valueOf(res.get("message")));
+    return;
+}
+```
+
+---
+
+### 六、异常处理与日志规范
+
+#### 6.1 异常处理
+
+- 业务可预期错误：通过 `DataTransferObject` 返回错误信息，不抛出异常。
+- 系统不可预期错误（NPE、远程调用异常等）：
+  - 在 Service 内捕获并记录日志；
+  - 返回通用错误信息（如 `OrderConstant.SERVICE_ERROR`），由 Controller 转为统一错误响应；
+  - 对于必须终止业务的地方，可以直接 `throw new PlaceOrderException(...)`，统一在上游捕获。
+
+#### 6.2 日志规范
+
+- 使用 `@Slf4j`，日志内容包括：
+  - 业务关键参数（订单号、用户 ID、处方号等）
+  - 外部系统返回内容（精简）
+
+```java
+log.info("限购请求参数 {} {}", ordersVo.getOrdersCode(), limitRequest.toJsonStr());
+log.error("OrderLocalService.billAddToOfc.e:{},{},{}", orderCode, e.getMessage(), e);
+```
+
+> 要求：在循环或高频调用中避免打印过多详细日志，必要时只打印统计信息或抽样。
+
+---
+
+### 八、新增 Service 推荐模板
+
+```java
+@Slf4j
+@Service
+public class DemoService {
+
+    @Autowired
+    private OrderCommonLogicService orderCommonLogicService;
+
+    @Autowired
+    private SomeDubboService someDubboService;
+
+    /**
+     * 示例：某业务处理
+     */
+    public DataTransferObject<DemoRes> handleDemo(DemoRequest req) {
+        DataTransferObject<DemoRes> dto = new DataTransferObject<>();
+
+        // 1. 基础校验
+        if (Check.NuNObj(req) || Check.NuNStrStrict(req.getBizCode())) {
+            dto.setErrorMsg("参数异常");
+            return dto;
+        }
+
+        try {
+            // 2. Dubbo 调用
+            DataTransferObject<SomeData> remote = someDubboService.doSomething(req.toRemoteReq());
+            if (!remote.checkSuccess() || Check.NuNObj(remote.getData())) {
+                dto.setErrorMsg(remote.getMsg());
+                return dto;
+            }
+
+            // 3. 组装返回
+            DemoRes res = buildDemoRes(remote.getData());
+            dto.setData(res);
+            return dto;
+        } catch (Exception e) {
+            log.error("DemoService.handleDemo error, req:{}, e:{}", req.toJsonStr(), e);
+            dto.setErrorMsg(OrderConstant.SERVICE_ERROR);
+            return dto;
+        }
+    }
+}
+```
+
+---
+
+### 九、关键注意事项（Service 层）
+
+1. **统一使用 `@Service`/`@Component` + `@Slf4j`**，不要用静态方法堆业务逻辑。
+2. **入参和返回值必须结构化**：入参用 DTO，返回值统一用 `DataTransferObject<T>`。
+3. **所有 Dubbo/HTTP 调用先判断 `checkSuccess()`**，再使用 `getData()`。
+4. **参数与业务校验放在 Service**，Controller 级只做最基础的空值/登录校验。
+5. **错误信息通过 `setErrorMsg` + 可选 `setErrCode` 传递，避免在 Service 中直接构造 `ResponseDto`。**
+6. **复杂链路（限购、运费、优惠券、黑名单、防疫药品）必须封装为独立私有方法**，保持主干流程清晰。
+7. **日志既要完整又要克制**：关键路口详细，循环内简洁。
+8. **跨模块复用逻辑提取到 `OrderCommonLogicService` / Wrapper 等专用类**，避免重复实现。
+9. **遵循现有典型 Service 风格**（尤其是 `OrderHandleService` 与 `OrderLocalService`），保证整体一致性。
+10. **新增 Service 前先确认是否可以在现有 Service 中扩展**，避免产生过多碎片化服务类。 
+

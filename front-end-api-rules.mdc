@@ -1,0 +1,385 @@
+---
+enabled: true
+name: frontend-api-rules
+description: 前端API接口开发规范（Controller开发规范）
+---
+
+## 前端 API 开发规范（Controller 开发规范）
+
+本规范结合当前项目 `com.jk.api.order` 包下现有代码（`OrderController`、`ClinicPrescriptionController`、`HealthCoinRedeemOrderController`、`v/v2` 版本 Controller 等），约束 Controller 层的统一写法，用于指导后续新增或重构接口。
+
+---
+
+### 一、类级别规范
+
+#### 1. 继承与基础类
+
+- **必须继承**：所有对外 HTTP 接口 Controller 必须继承 `AbstractController`（或其子类 `v.controller.BaseController`）。
+- `AbstractController` 提供的能力：
+  - `getHeader(HttpServletRequest)`：解析公共头 `Header`
+  - `getEntity(HttpServletRequest, Class<T>)`：将请求体 JSON/表单解析为 DTO
+  - `getMap(HttpServletRequest)`：获取参数 Map
+  - `getPar(HttpServletRequest)`：获取原始 JSON 字符串
+
+示例：
+
+```java
+@Slf4j
+@RestController
+@RequestMapping("/api/order")
+public class OrderController extends AbstractController {
+    // ...
+}
+```
+
+v 版本 Controller 可以继承：
+
+```java
+public class BaseController extends AbstractController implements ApplicationContextAware {
+    @Autowired
+    protected OrderHandleService orderHandleService;
+    // ...
+}
+```
+
+#### 2. Controller 注解
+
+- 新增/常规接口推荐使用 `@RestController`。
+
+```java
+@Slf4j
+@RestController
+@RequestMapping("/info")
+public class OrderController extends AbstractController { ... }
+```
+
+#### 3. 类级别路径
+
+- 统一使用 `@RequestMapping` 定义模块前缀：
+  - 订单：`@RequestMapping("/api/order")`
+  - 门诊：`@RequestMapping("/api/clinic")`
+  - 健康币：`@RequestMapping("/healthCoin")`
+  - v：`@RequestMapping("/info")`
+  - v2：`@RequestMapping("/v2/info")`
+
+路径使用小写字母，多个单词使用驼峰命名。
+
+#### 4. 成员注入
+
+- 依赖注入统一使用 `@Autowired` 或 `@Resource`：
+
+```java
+@Autowired
+private OrderHandleV2Service orderHandleService;
+
+@Resource(name = "order.clinicPrescriptionsService")
+private ClinicPrescriptionsService ordersService;
+```
+
+#### 5. 服务调用
+
+1. 所有的查询都走dubbo服务
+2. 所有的修改都走dubbo服务
+3. 调用dubbo接口后都通过log.info打印日志
+4. dubbo服务的引用需要校验dubbo-consumer.xml中是否存在引用
+
+---
+
+### 二、方法级别规范
+
+#### 1. 方法签名与注解
+
+- 所有对外接口方法的返回类型统一为 `ResponseDto`。
+- 必须通过 `@RequestMapping` 显式声明 `value` 与 `method`：
+
+```java
+@RequestMapping(value = "/initOrder", method = RequestMethod.POST)
+public ResponseDto initOrder(HttpServletRequest request, HttpServletResponse response) { ... }
+```
+
+- 均使用 `@RestController` 
+
+#### 2. Header 解析与校验
+
+Controller 首行优先解析头信息，并进行非空校验：
+
+```java
+Header header = getHeader(request);
+if (Check.NuNObj(header)) {
+    return new ResponseDto("头信息为空");
+}
+```
+
+必要时，还需校验：
+
+```java
+if (Check.NuNStrStrict(header.getUserId())) {
+    return new ResponseDto(OrderConstant.USER_NOI_LOGIN);
+}
+```
+
+> 说明：`Header` 中常用字段包括 `userId`、`applicationCode`、`source`、`serverId`、`versionName` 等，Controller 需根据业务需求补齐到 DTO 中。
+
+#### 3. 请求参数获取方式
+
+**复杂 JSON 对象：**
+
+统一使用 `getEntity`：
+
+```java
+OrderRequestDTO paramRequest = getEntity(request, OrderRequestDTO.class);
+```
+
+
+#### 4. 参数校验规范
+
+优先使用统一的 `Check` 工具类：
+
+- `Check.NuNObj(obj)`：对象为空
+- `Check.NuNObjs(obj1, obj2, ...)`：任一为空
+- `Check.NuNStr(str)` / `Check.NuNStrStrict(str)`：字符串为空
+- `Check.NuNCollection(collection)`：集合为空
+
+示例：
+
+```java
+if (Check.NuNObjs(paramRequest, paramRequest.getOrderId(), paramRequest.getConsigneeName())) {
+    return new ResponseDto(OrderConstant.INVALID_PARAM);
+}
+
+if (Check.NuNCollection(paramRequest.getRightProductList())) {
+    return new ResponseDto(OrderConstant.INVALID_PARAM);
+}
+```
+
+复杂业务校验应下沉到 Service 层，通过 `DataTransferObject` 返回错误信息：
+
+```java
+DataTransferObject<Void> checkParm = orderCommonLogicService.checkParam(paramRequest);
+if (!checkParm.checkSuccess()) {
+    return checkParm.trans2Res();
+}
+```
+
+---
+
+### 三、返回值与统一封装
+
+#### 1. 统一使用 ResponseDto
+
+- 成功（无数据）：
+
+```java
+return new ResponseDto();
+```
+
+- 成功（有数据）：
+
+```java
+DataTransferObject<InitOrderVO> dto = new DataTransferObject<>();
+dto.setData(initOrderVO);
+return dto.trans2Res();
+```
+
+- 失败：
+
+```java
+return new ResponseDto("参数错误");
+// 或使用业务常量
+return new ResponseDto(OrderConstant.INVALID_PARAM);
+```
+
+> Controller 不直接返回 `DataTransferObject`、Entity 或内部 DTO，而是统一转为 `ResponseDto`。
+
+#### 2. 分页返回规范
+
+- Service 层使用 `PagingResult<T>` + `PageBounds`。
+- Controller 层一般直接透传 `PagingResult`，由 `DataTransferObject<PagingResult<T>>.trans2Res()` 统一回包。
+- 若需要返回 `rows/total` 结构，则应在 Service/组装层封装 VO，Controller 只负责转发。
+
+---
+
+### 四、异常处理与日志
+
+#### 1. AOP 异常拦截
+
+项目通过 `OrderExceptionIntercepter` 对 Controller 层进行统一异常和日志处理：
+
+```java
+public Object around(ProceedingJoinPoint joinPoint) {
+    // 1. 提取类名、方法名、request
+    // 2. 正常执行
+    Object result = joinPoint.proceed();
+    ResponseDto dto = (ResponseDto) result;
+    LOGGER.info("【日志详情】 类名{} 方法:{},Header:{},参数:{}, 结果：{}",
+            className, methodName,
+            request.getAttribute(HeadersInterceptor.HEADER),
+            request.getAttribute(ParamCollector.PARAMS),
+            dto.toJsonStr());
+    return result;
+}
+```
+
+异常时：
+
+```java
+LOGGER.error("【处理异常】 类名{}, 方法:{},Header:{},参数:{},错误：{}",
+        className, methodName,
+        request.getAttribute(HeadersInterceptor.HEADER),
+        request.getAttribute(ParamCollector.PARAMS),
+        var10);
+return new ResponseDto("系统繁忙，请稍候重试");
+```
+
+**规范要求**：
+
+- Controller 层一般不需要手动 try-catch 全包异常，除非有特殊补偿/回滚逻辑。
+- 一旦有业务异常需要吞掉或转码，必须保证最终仍返回 `ResponseDto`。
+
+#### 2. 业务日志
+
+- 使用 `@Slf4j` 提供的 `log`：
+
+```java
+log.info("下单请求参数：{}", JsonEntityTransform.Object2Json(paramRequest));
+log.error("OrderController.placeOrder.e:{},{}", e.getMessage(), e);
+```
+
+- 避免在 Controller 中打印大量无意义日志，聚焦：
+  - 关键入参
+  - 关键结果
+  - 外部接口调用结果
+
+---
+
+### 五、URL 与方法命名规范
+
+#### 1. 类路径与方法路径
+
+- 类路径统一代表**模块**：
+  - `/api/order`、`/api/clinic`、`/healthCoin`、`/info`、`/v2/info` 等。
+- 方法路径代表**具体动作**，命名要反映业务含义：
+
+
+
+#### 2. 方法命名建议
+
+- 常见前缀：
+  - 初始化：`initOrder`、`initNewOrder`
+  - 下单：`placeOrder`
+  - 取消/删除：`cancelOrder`、`deleteOrder`
+  - 列表：`orderList`、`redeemList`
+  - 详情：`orderDetail`、`redeemDetail`、`getPaidFinish`
+  - 统计：`count`
+
+> 要求：方法名与路径含义保持一致，便于快速从 URL 定位到代码。
+
+---
+
+### 六、Request / VO / DTO 配合规范
+
+#### 1. Request 对象
+
+- 位置：`request` 包。
+- 统一使用 Lombok `@Data`、`@Accessors(chain = true)`（按需）：
+
+```java
+@Data
+public class GuidanceRequest {
+    private Integer originType;
+    private String sourceCode;
+    @NotNull(message = "患者年龄不能为空")
+    private Integer age;
+    // ...
+}
+```
+
+- 复杂嵌套对象使用静态内部类（如 `GuidanceRequest.Drug`、`GuidanceRequest.Attachment`）。
+- 可以使用 JSR-303 注解（`@NotNull`、`@Size` 等）标注必填规则，Controller 中可结合手动或统一校验使用。
+
+#### 2. 响应 VO 对象
+
+- 位置：`response` 包或 `v2/response` 子包。
+- 面向前端展示，禁止直接透出 Entity。
+- 示例：`OrderInsertRes`、`InventoryQueryRes`、`HealthCoinRedeemOrderRes`、`HealthCoinRedeemDetail` 等。
+- 使用 Lombok 注解简化代码，如：
+
+```java
+@Getter
+@Setter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class OrderInsertRes extends BaseEntity {
+    private String ordersCode;
+    private Long sum;
+    // ...
+}
+```
+
+Controller 中通过 `DataTransferObject<VO>` 封装后返回：
+
+```java
+HealthCoinRedeemOrderRes res = new HealthCoinRedeemOrderRes();
+res.setOrdersCode(orderCode);
+return new DataTransferObject<>(res).trans2Res();
+```
+
+---
+
+### 七、新增 Controller 推荐模板
+
+```java
+@Slf4j
+@RestController
+@RequestMapping("/api/demo")
+public class DemoController extends AbstractController {
+
+    @Autowired
+    private DemoService demoService;
+
+    /**
+     * 示例：Demo 接口
+     */
+    @RequestMapping(value = "/demoAction", method = RequestMethod.POST)
+    public ResponseDto demoAction(HttpServletRequest request, HttpServletResponse response) {
+        // 1. Header 解析
+        Header header = getHeader(request);
+        if (Check.NuNObj(header)) {
+            return new ResponseDto("头信息为空");
+        }
+
+        // 2. 请求体解析
+        DemoRequest demoRequest = getEntity(request, DemoRequest.class);
+        if (Check.NuNObj(demoRequest) || Check.NuNStrStrict(demoRequest.getBizCode())) {
+            return new ResponseDto(OrderConstant.INVALID_PARAM);
+        }
+        demoRequest.setUserId(header.getUserId());
+
+        // 3. 业务校验（下沉到 Service）
+        DataTransferObject<Void> checkResult = demoService.checkParam(demoRequest);
+        if (!checkResult.checkSuccess()) {
+            return checkResult.trans2Res();
+        }
+
+        // 4. 调用业务逻辑
+        DataTransferObject<DemoRes> dto = demoService.handle(demoRequest, header);
+        return dto.trans2Res();
+    }
+}
+```
+
+---
+
+### 八、总结性注意事项（Controller 层）
+
+1. **必须继承 `AbstractController`**，统一获取 Header、参数解析等逻辑。
+2. **始终返回 `ResponseDto`**，不要直接返回内部 DTO / Entity。
+3. **入参校验不可缺失**：`Header`、必填字段、集合等都要使用 `Check` 或 `Assert` 校验。
+4. **复杂业务校验/逻辑下沉到 Service**，Controller 只做“装配 + 转发 + 回包”。
+5. **异常统一由 `OrderExceptionIntercepter` 处理**，仅在需要补偿的地方使用 try-catch。
+6. **日志简洁但关键**：入参、核心结果、外部依赖调用记录清晰。
+7. **路径与方法命名反映业务**，保持与现有模块风格一致。
+8. **区分 v/v2 版本**：通过不同路径前缀与 Bean 名避免冲突。
+9. **Request/VO/DTO 分包管理清晰**，便于前后端协作和维护。
+10. **新增规范优先参考现有典型 Controller 实现**，保持整体项目风格统一。

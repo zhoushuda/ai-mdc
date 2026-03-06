@@ -96,7 +96,7 @@ private PaymentMerchantService paymentMerchantService;
 - `ServeRecordOrderService`：
   - 服务记录订单初始化（如服务包等）
 
-> 新增 Service 时，应优先判断是“通用逻辑类”还是“具体业务流程类”，避免职责混乱。
+> 新增 Service 时，应优先判断是"通用逻辑类"还是"具体业务流程类"，避免职责混乱。
 
 ---
 
@@ -239,7 +239,8 @@ if (!dealStatus) {
 
 ```java
 log.info("限购请求参数 {} {}", ordersVo.getOrdersCode(), limitRequest.toJsonStr());
-log.error("OrderLocalService.billAddToOfc.e:{},{},{}", orderCode, e.getMessage(), e);
+// Throwable(e) 必须作为最后一个参数，保证堆栈完整输出
+log.error("OrderLocalService.billAddToOfc 异常, orderCode:{}, msg:{}", orderCode, e.getMessage(), e);
 ```
 
 > 要求：在循环或高频调用中避免打印过多详细日志，必要时只打印统计信息或抽样。
@@ -284,7 +285,8 @@ public class DemoService {
             dto.setData(res);
             return dto;
         } catch (Exception e) {
-            log.error("DemoService.handleDemo error, req:{}, e:{}", req.toJsonStr(), e);
+            // Throwable(e) 必须作为最后一个参数，保证堆栈完整输出
+            log.error("DemoService.handleDemo 异常, req:{}", req.toJsonStr(), e);
             dto.setErrorMsg(OrderConstant.SERVICE_ERROR);
             return dto;
         }
@@ -306,4 +308,3 @@ public class DemoService {
 8. **跨模块复用逻辑提取到 `OrderCommonLogicService` / Wrapper 等专用类**，避免重复实现。
 9. **遵循现有典型 Service 风格**（尤其是 `OrderHandleService` 与 `OrderLocalService`），保证整体一致性。
 10. **新增 Service 前先确认是否可以在现有 Service 中扩展**，避免产生过多碎片化服务类。 
-

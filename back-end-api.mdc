@@ -23,12 +23,10 @@ globs: web-api/**/*Controller.java
 ### 类结构
 
 ```java
-@Sl4j
+@Slf4j
 @RestController
 @RequestMapping("api/{模块名}")
 public class XxxController {
-    private static final Logger LOGGER = LoggerFactory.getLogger(XxxController.class);
-    
     @Autowired
     // 或 @Resource(name = "xxx")
     private XxxService xxxService;
@@ -43,10 +41,7 @@ public class XxxController {
 
 ```java
 /**
- * @ClassNme XxxController
- * @Desc TODO
- * @Author 作者
- * @Date 日期
+ * TODO
  **/
 ```
 
@@ -153,7 +148,8 @@ public ResponseDto templateList(@RequestBody FollowPlanTemplateListRequest reque
         pageResult.setTotal(result.getTotal());
         dto.setData(pageResult);
     } catch (Exception e) {
-        LogUtil.error(LOGGER, "查询模版列表异常:{}", e);
+        // 只打一条 error，异常对象 e 必须放在最后一个参数，保证堆栈完整输出
+        log.error("XxxController.templateList 异常, request:{}", JsonEntityTransform.Object2Json(request), e);
         return new ResponseDto("查询模版列表异常");
     }
     return new ResponseDto(dto);
@@ -168,11 +164,34 @@ public ResponseDto templateList(@RequestBody FollowPlanTemplateListRequest reque
 
 ### 异常处理
 
-**不需要使用try-catch捕获异常并记录日志：**
+**优先不在 Controller 层写 try-catch 全包异常：**
+- 默认让异常抛出，由全局异常处理（如 `@RestControllerAdvice` / AOP）统一兜底、统一返回。
+
+**允许使用 try-catch 的场景（少数）：**
+- 需要将异常转换成业务可读的 `ResponseDto` 信息（例如第三方接口异常需要提示“系统繁忙/保存失败”等）。
+- 需要做必要的资源释放/补偿（且无法通过框架机制完成）。
 
 **规范要求：**
-- 使用`log.error`记录异常日志
+- catch 内 **只打一条 `log.error`**，且必须带上关键入参（建议 JSON）与方法名
 - 返回用户友好的错误信息
+
+**异常日志写法要求（非常重要）：**
+- `Throwable`（如 `e`）必须作为 **最后一个参数**，用于完整打印堆栈
+- 禁止写法：`log.error("error:{}", e)`（这种写法通常不会打印堆栈）
+
+✅ 推荐：
+
+```java
+log.error("XxxController.xxx 异常, params:{}", JsonEntityTransform.Object2Json(request), e);
+```
+
+❌ 禁止：
+
+```java
+log.error("error:{}", e);
+log.error("异常:{}", e);
+```
+
 
 ### 方法注释
 
@@ -360,14 +379,14 @@ public ResponseDto patientTags() {
 1. **请求方式明确**：任何接口都需要明确具体的请求方式（GET/POST）
 2. **返回类型统一**：所有接口返回对象必须是`ResponseDto`
 3. **参数验证必须**：所有接口必须进行参数验证，使用`Check`工具类
-4. **异常处理必须**：所有可能抛出异常的地方必须使用try-catch包裹
-5. **日志记录必须**：异常必须使用`LogUtil.error`记录日志
+4. **异常处理必须**：所有可能抛出异常的地方使用BusinessException 抛出异常
+5. **日志记录必须**：异常必须使用@Slf4j注解标记类且记录日志
 6. **分页查询本地化**：后台的分页查询接口都需要写在本地，不能调用dubbo服务
 7. **新增更新走Dubbo**：后台的新增和更新接口都需要走dubbo服务
 8. **Dubbo调用日志**：调用dubbo服务后都需要打印日志
 9. **路径命名规范**：使用小写字母，多个单词使用驼峰命名
 10. **方法命名规范**：遵循save/update/delete/get/find等前缀规范
-11. **尽量使用@lombook注解**：包裹Get/Set/Data等其他注解
+11. **使用@lombook注解**：包裹Get/Set/Data等其他注解
 12. **所有的增删改必须走dubbo服务，分页查走本地**
 
 ## 常用工具类
@@ -380,9 +399,37 @@ Check.NuNStr(str)          // 检查字符串是否为null或空
 Check.NuNCollection(list)  // 检查集合是否为null或空
 ```
 
-### LogUtil工具类
+### Slf4j
 
 ```java
-log.error("错误信息:{}", e);    // 记录错误日志
+log.error("错误信息", e);       // 记录错误日志（带堆栈）
 log.info("信息:{}", data);     // 记录信息日志
+
+```
+
+- 如果遇到如下日志代码，直接删除，改为使用注解实现
+
+```
+    public static final Logger LOGGER = LoggerFactory.getLogger(CouponPersonalizedController.class);
+```
+改为使用 @Slf4j 案例如下 
+
+```
+log.error("CouponPersonalizedController.saveSendActivity 异常, params:{}", JsonEntityTransform.Object2Json(actRequest), e);
+
+log.info("日志输出 {}",param);
+```
+
+### 日志规范（Controller 通用）
+
+- **日志门面**：统一使用 `@Slf4j` 的 `log`，禁止 `LoggerFactory.getLogger(...)` 与 `LogUtil.*(LOGGER, ...)` 混用
+- **异常日志**：
+  - 必须包含：`类名.方法名` + 关键参数（建议 JSON） + `Throwable`
+  - 只打一条 `error`，避免 `info(params)+error(e)` 重复刷屏
+- **Dubbo 调用日志**：调用后必须打印日志（按需精简返回体）
+
+示例：
+
+```java
+log.info("调用Dubbo服务获取通用信息, req:{}, res:{}", JsonEntityTransform.Object2Json(request), result);
 ```

@@ -259,8 +259,28 @@ return result.getData();
 
 **规范要求：**
 - ServiceImpl层不捕获异常，让异常向上抛出
-- 使用`RuntimeException`抛出业务异常
+- 业务异常统一使用项目内的业务异常类型（优先 `BusinessException`，或项目既有的业务异常，如 `BsException` 等）
 - 异常信息要清晰明确
+
+## 日志规范（ServiceImpl）
+
+**规范要求：**
+- 优先使用 `@Slf4j` 注解提供的 `log`，避免 `LoggerFactory.getLogger(...)` 的静态 `LOGGER`
+- 仅在关键链路、关键状态异常、重要外部依赖调用点打印日志，避免循环/高频打印
+- 异常日志写法必须保证堆栈输出：`Throwable`（如 `e`）必须作为**最后一个参数**
+
+✅ 推荐：
+
+```java
+log.error("XxxServiceImpl.xxx 异常, req:{}", JsonEntityTransform.Object2Json(request), e);
+```
+
+❌ 禁止：
+
+```java
+log.error("error:{}", e);
+log.error("异常:{}", e);
+```
 
 ```java
 if (request.getId() == null) {
@@ -462,12 +482,15 @@ public Integer saveTagRuleKeyword(TagRulekeywordRequest request) {
 2. **新增更新走Dubbo**：后台的新增和更新接口都需要走dubbo服务，保证事务一致性
 3. **分页查询本地化**：后台的分页查询接口都需要写在本地，不能调用dubbo服务
 4. **异常向上抛出**：ServiceImpl层不捕获异常，让异常向上抛出到Controller层处理
+4. **异常处理必须**：所有可能抛出异常的地方使用BusinessException 抛出异常
+5. **日志记录必须**：异常必须使用@Slf4j注解标记类且记录日志
 5. **对象转换**：使用`BeanUtils.copyProperties`进行对象属性拷贝，特殊情况下手动映射
 6. **私有方法**：复杂逻辑抽取为私有方法，提高代码可读性
 7. **数据验证**：更新操作前应先查询验证数据是否存在
 8. **返回类型**：查询单个返回Entity或VO，查询列表返回List或PagingResult
 9. **字段修饰符**：Dao和Dubbo服务使用`private`修饰符
 10. **方法注释**：所有公共方法必须添加注释说明
+11. **mapper位置**：参照其他的mapperxml文件放置位置
 
 ## 常用工具类
 

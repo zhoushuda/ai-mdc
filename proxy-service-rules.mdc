@@ -7,7 +7,7 @@ description: dubbo项目 Proxy 层开发规范,主要针对dubbo项目
 
 Proxy 层是 Dubbo 项目中服务对外暴露的实现层，典型特征和职责包括：
 
-- 仅做“接口实现”与“上下层解耦”，不承载具体业务流程与数据访问细节；
+- 仅做"接口实现"与"上下层解耦"，不承载具体业务流程与数据访问细节；
 - `implements` 对应 API 接口，只暴露被 Dubbo 服务暴露的公共方法；
 - 所有方法参数与返回值均使用通用的 `DataTransferObject<T>`；
 - 主要负责参数校验、调用底层 Service/Manager 组合服务、异常处理与日志输出；
@@ -146,6 +146,12 @@ return dto;
   - 真正的系统异常（NPE、RPC 异常等）允许向上抛出，由统一异常处理机制兜底。
 - 如确需在局部捕获异常（极少数场景）：
   - 只能用于资源释放或补充日志，**禁止吞掉异常**，应重新抛出或包装后抛出。
+  - 异常日志必须保证 `Throwable` 作为最后一个参数，堆栈完整输出：
+
+```java
+log.error("TransportRuleServiceProxy.calculateFreight 异常, req:{}", JsonEntityTransform.Object2Json(request), e);
+throw e;
+```
 
 #### 4.2 错误码与文案
 
@@ -217,4 +223,3 @@ public class DemoServiceProxy implements DemoService {
 3. **Proxy 层不使用 `try-catch` 包裹整个方法**，异常由全局机制统一处理。
 4. 复杂业务逻辑尽量下沉到 Service / Manager，保持 Proxy 简洁可读。
 5. 日志必须包含入参 JSON 和关键标识，便于排查链路问题。
-

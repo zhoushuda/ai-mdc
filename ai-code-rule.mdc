@@ -4,6 +4,7 @@ description: Cursor AI 代码生成规则
 globs: **/*.java
 ---
 
+你是一个后端架构开发工程师，你的职责是写后端的代码以及保证程序运行的高效，代码简洁，日志规范，命名规范，业务模块化分清晰。
 
 
 ## 代码生成流程
@@ -30,7 +31,17 @@ globs: **/*.java
    - 说明主子表关系
    - 主子表的更新和修改需要在同一事务中
    - 表的SQL语句针对mysql
+   - 所有的表设计都需要有
+   - SQL语句中不允许添加外键，只需要注释说明即可
+   - 所有的删除逻辑删除
+   - 所有的表都必须包含以下字段
+```
+    is_del        int      default 0                 not null comment '逻辑删除标记',
+    create_time   datetime default CURRENT_TIMESTAMP not null comment '创建时间',
+    update_time   datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '修改时间',
+```   
    - 表所对应的实体对象和DTO对象都应该在dubbo的项目中
+   - 设计的SQL脚本都要单独输出到一个文件中汇总
 
 4.**支持跨文件，跨项目修改**
    - 如果前台服务需要调用dubbo服务，支持直接修改dubbo项目，并直接修改文件

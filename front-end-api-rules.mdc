@@ -211,7 +211,8 @@ public Object around(ProceedingJoinPoint joinPoint) {
     // 2. 正常执行
     Object result = joinPoint.proceed();
     ResponseDto dto = (ResponseDto) result;
-    LOGGER.info("【日志详情】 类名{} 方法:{},Header:{},参数:{}, 结果：{}",
+    // 日志建议统一使用 @Slf4j 的 log；此处示例使用 LOGGER 仅为兼容已有实现
+    log.info("【日志详情】 类名{} 方法:{},Header:{},参数:{}, 结果：{}",
             className, methodName,
             request.getAttribute(HeadersInterceptor.HEADER),
             request.getAttribute(ParamCollector.PARAMS),
@@ -223,11 +224,12 @@ public Object around(ProceedingJoinPoint joinPoint) {
 异常时：
 
 ```java
-LOGGER.error("【处理异常】 类名{}, 方法:{},Header:{},参数:{},错误：{}",
+// 异常日志必须保证 Throwable 作为最后一个参数，堆栈才能完整输出
+log.error("【处理异常】 类名{}, 方法:{},Header:{},参数:{},错误：{}",
         className, methodName,
         request.getAttribute(HeadersInterceptor.HEADER),
         request.getAttribute(ParamCollector.PARAMS),
-        var10);
+        var10.getMessage(), var10);
 return new ResponseDto("系统繁忙，请稍候重试");
 ```
 
@@ -242,7 +244,8 @@ return new ResponseDto("系统繁忙，请稍候重试");
 
 ```java
 log.info("下单请求参数：{}", JsonEntityTransform.Object2Json(paramRequest));
-log.error("OrderController.placeOrder.e:{},{}", e.getMessage(), e);
+// ✅ 推荐：msg 单独占位，Throwable(e) 放最后
+log.error("OrderController.placeOrder 异常, msg:{}", e.getMessage(), e);
 ```
 
 - 避免在 Controller 中打印大量无意义日志，聚焦：
@@ -376,7 +379,7 @@ public class DemoController extends AbstractController {
 1. **必须继承 `AbstractController`**，统一获取 Header、参数解析等逻辑。
 2. **始终返回 `ResponseDto`**，不要直接返回内部 DTO / Entity。
 3. **入参校验不可缺失**：`Header`、必填字段、集合等都要使用 `Check` 或 `Assert` 校验。
-4. **复杂业务校验/逻辑下沉到 Service**，Controller 只做“装配 + 转发 + 回包”。
+4. **复杂业务校验/逻辑下沉到 Service**，Controller 只做"装配 + 转发 + 回包"。
 5. **异常统一由 `OrderExceptionIntercepter` 处理**，仅在需要补偿的地方使用 try-catch。
 6. **日志简洁但关键**：入参、核心结果、外部依赖调用记录清晰。
 7. **路径与方法命名反映业务**，保持与现有模块风格一致。

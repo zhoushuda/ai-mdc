@@ -67,6 +67,8 @@ public class MallOrderServiceImpl {
 
 #### 3.1 与 DAO 的协作
 
+所有的DAO层参数尽可能使用对象传参
+
 - ServiceImpl 持有 DAO 引用，通过 `@Resource` / `@Autowired` 注入：
 
 ```java
@@ -98,6 +100,28 @@ public MallOrderVo getMallOrderByCodeWithCache(String orderCode) {
     return vo;
 }
 ```
+
+#### 3.2 Dao层批量插入规范
+
+	1.尽量使用对象传参
+```
+    public int insertBatch(List<ProductRegionRestrictionDetailEntity> list) {
+        Map<String, Object> param = new HashMap<>(3);
+        param.put("list", list);
+        return mybatisDaoContext.getWriteSqlSessionTemplate().insert(SQLID + "insertBatch", param);
+    }
+	
+	public int deleteByRestrictionId(Integer restrictionId) {
+        ProductRegionRestrictionDetailEntity entity = new ProductRegionRestrictionDetailEntity();
+        entity.setRestrictionId(restrictionId);
+        return mybatisDaoContext.update(SQLID + "deleteByRestrictionId", entity);
+    }
+```
+
+## 数据对象规范
+
+所有的数据对象都添加@Data@NoArgsConstructor
+默认继承BaseEntity对象
 
 ---
 
@@ -146,6 +170,13 @@ if (Check.NuNObjs(request) || Check.NuNStrStrict(request.getOrderCode())) {
 
 ```java
 log.info("MallOrderServiceImpl.insertBatch 参数:{}", JsonEntityTransform.Object2Json(mallPatientDoctorRefEntityList));
+```
+
+**异常日志补充要求：**
+- 如需记录异常，必须保证 `Throwable(e)` 作为最后一个参数，堆栈完整输出：
+
+```java
+log.error("MallOrderServiceImpl.insertBatch 异常, size:{}", mallPatientDoctorRefEntityList == null ? 0 : mallPatientDoctorRefEntityList.size(), e);
 ```
 
 ---
@@ -199,7 +230,7 @@ public class MallOrderServiceImpl {
 
 1. ServiceImpl 只对内部 Proxy / 其他 Service 暴露，不直接暴露给 Dubbo / Controller。
 2. 不使用 `DataTransferObject`，也不输出对前端的错误文案。
-3. 统一封装“DAO + 缓存 + 组件”的组合操作，减少上层重复代码。
+3. 统一封装"DAO + 缓存 + 组件"的组合操作，减少上层重复代码。
 4. 复杂流程可以在 ServiceImpl 内实现，但要注意方法拆分，保持逻辑清晰。
 5. 命名和风格尽量与现有各类 `XXXServiceImpl` 保持一致，保证可读性和可维护性。
-
+6.代码写完后 需要补充 dubbo 服务的dubbo-consumer.xml和dubbo-provider.xml文件
